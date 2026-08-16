@@ -1,44 +1,34 @@
 version: '3.8'
 
 services:
-
-  web:
-    build: ./project
-    ports:
-      - 8004:8000
-    command: uvicorn main:app --host 0.0.0.0 --reload
-    volumes:
-      - ./project:/usr/src/app
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    depends_on:
-      - redis
-
-  worker:
-    build: ./project
-    command: celery -A worker.celery worker --loglevel=info --logfile=logs/celery.log
-    volumes:
-      - ./project:/usr/src/app
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    depends_on:
-      - web
-      - redis
-
+  # 1. REDIS - Message Broker
   redis:
-    image: redis:7
-
-  dashboard:
-    build: ./project
-    command: celery --broker=redis://redis:6379/0 flower --port=5555
+    image: redis:alpine
+    container_name: redis-broker
+    restart: always
     ports:
-      - 5556:5555
+      - "6379:6379"
+
+  # 2. FASTAPI WEB SERVICE
+  web:
+    build: .
+    container_name: fastapi-web
+    restart: always
+    ports:
+      - "8000:8000"
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
-      - web
       - redis
-      - worker
+    command: uvicorn project.main:app --host 0.0.0.0 --port 8000
+
+  # 3. CELERY WORKER
+  worker:
+    build: .
+    container_name: celery-worker
+    restart: always
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    command: celery -A project.worker.celery worker --concurrency=3 --loglevel=info

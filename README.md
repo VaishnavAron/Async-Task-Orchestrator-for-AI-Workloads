@@ -157,6 +157,31 @@ Navigate to **`http://localhost:8000/dashboard`** in your browser! 🎉
 
 ---
 
+## ☁️ AWS EC2 Deployment (Production)
+
+This project is containerized for production deployment on AWS EC2 using Docker Compose.
+
+### Prerequisites:
+- AWS account with EC2 access ($80 free credits recommended)
+- Docker and Docker Compose installed on EC2
+
+### Deployment Steps:
+1. SSH into your EC2 instance.
+2. Clone the repository.
+3. Run: `sudo docker compose up -d --build` (or `./deploy.sh`)
+4. Access: `http://<your-ec2-public-ip>:8000/dashboard`
+
+### Architecture on EC2:
+- **Redis**: Message broker (port 6379)
+- **FastAPI**: Web gateway (port 8000)
+- **Celery Worker**: Async task processor (concurrency=3)
+
+### Cost:
+- EC2 `t4g.small` (~$0.018/hr) runs comfortably within AWS Free Tier credits.
+- Zero cold-start latency (always-on).
+
+---
+
 ## ☁️ 1-Click Cloud Deployment (Render)
 
 This repository includes a turnkey [`render.yaml`](render.yaml) blueprint specification for instant cloud deployment.
