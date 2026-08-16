@@ -360,14 +360,25 @@ async function killGhosts() {
       const count = result.killed ? result.killed.length : 0;
       ui.showToast(result.message || `✅ Killed ${count} ghost worker(s).`);
       
-      await syncWorkerCount();
-      const data = await apiClient.fetchWorkerCount();
-      const osCount = data.total_workers || 0;
-      
-      if (osCount < appState.workerNodes.length) {
-        appState.workerNodes = appState.workerNodes.slice(0, osCount);
+      // Step 1: Extract the killed worker names from the API response
+      const killedNames = result.killed || []; // e.g., ['worker-05']
+
+      // Step 2: Filter ONLY the killed workers from appState.workerNodes
+      if (killedNames.length > 0) {
+        const previousCount = appState.workerNodes.length;
+        appState.workerNodes = appState.workerNodes.filter(
+          worker => !killedNames.includes(worker.id) && !killedNames.includes(worker.name)
+        );
+        const removedCount = previousCount - appState.workerNodes.length;
+        console.log(`[DEBUG] Surgically removed ${removedCount} worker(s): ${killedNames.join(', ')}`);
+        
+        // Step 3: Re-render the UI with the remaining workers
         ui.renderWorkerCards(appState.workerNodes);
-        ui.updateWorkerHeader(osCount, appState.workerNodes.length);
+        ui.updateWorkerHeader(appState.workerNodes.length, appState.workerNodes.length);
+      } else {
+        // If no ghosts were killed, just refresh the header
+        console.log("[DEBUG] No ghosts killed. UI unchanged.");
+        await syncWorkerCount(); // Just update the header count
       }
 
       // Re-enable scale button if below 4 nodes
