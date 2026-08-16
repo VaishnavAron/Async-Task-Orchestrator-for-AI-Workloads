@@ -7,7 +7,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from celery.result import AsyncResult
 
-from worker import celery, analyze_sentiment
+# from worker import celery, analyze_sentiment
+from project.worker import celery, analyze_sentiment
 
 # ---------------------------------------------------------
 # FastAPI Application Configuration
