@@ -38,8 +38,14 @@ def read_root(request: Request):
     return {"status": "healthy", "service": "Distributed AI Task Scheduler", "version": "2.0.0"}
 
 @app.get("/health")
+@app.get("/ping")
 def health_check():
-    return {"status": "healthy", "service": "Distributed AI Task Scheduler", "version": "2.0.0"}
+    return {
+        "status": "healthy",
+        "service": "Distributed AI Task Scheduler",
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "version": "2.0.0"
+    }
 
 @app.get("/dashboard")
 def render_dashboard(request: Request):
