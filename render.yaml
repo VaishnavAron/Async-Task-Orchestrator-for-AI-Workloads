@@ -1,0 +1,39 @@
+services:
+  # === SERVICE 1: THE FASTAPI WEB GATEWAY ===
+  - type: web
+    name: distributed-ai-scheduler-web
+    runtime: python
+    plan: free
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: redis-cache
+          property: connectionString
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn project.main:app --host 0.0.0.0 --port $PORT
+
+  # === SERVICE 2: THE CELERY WORKER (LINUX PREFORK CLUSTER) ===
+  - type: worker
+    name: distributed-ai-scheduler-worker
+    runtime: python
+    plan: free
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: redis-cache
+          property: connectionString
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A project.worker.celery worker --concurrency=3 --loglevel=info
+
+  # === REDIS CACHE (BROKER + RESULT BACKEND) ===
+  - type: redis
+    name: redis-cache
+    plan: free
+    maxmemoryPolicy: noeviction
+    ipAllowList: []
