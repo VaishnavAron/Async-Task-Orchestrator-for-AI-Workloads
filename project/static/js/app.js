@@ -1,16 +1,15 @@
 /**
  * Distributed AI Task Scheduler - Core Application Orchestrator
- * Final Deployment Patch: 5.0s Progress Bar, Re-render Worker Cards, Boot Retry, Dynamic Heatmap.
+ * Memory-Safe Demo Configuration: Start 2 Nodes, Max 4 Nodes, Concurrency 3.
  */
 
-// Application Global State (Strict 1:1 OS Worker Mapping)
+// Application Global State (Strict 1:1 OS Worker Mapping, Defaults to 2 nodes for EC2 memory safety)
 const appState = {
   totalProcessed: 0,
   pendingTaskQueue: [], // Queue of { taskId, text } awaiting an idle worker slot
   workerNodes: [
     { id: 1, name: "worker-01", role: "Primary NLP Core", busy: false, crashed: false, activeTaskId: null },
-    { id: 2, name: "worker-02", role: "Inference Engine", busy: false, crashed: false, activeTaskId: null },
-    { id: 3, name: "worker-03", role: "Fault Tolerance", busy: false, crashed: false, activeTaskId: null }
+    { id: 2, name: "worker-02", role: "Inference Engine", busy: false, crashed: false, activeTaskId: null }
   ]
 };
 
@@ -27,7 +26,7 @@ window.isActionProcessing = false;
 let lastKnownWorkerCount = 0;
 let lastKnownGhostCount = 0;
 
-// Hard reset boot race condition retry tracking (Fix 3)
+// Hard reset boot race condition retry tracking
 let lastResetTime = 0;
 let resetSyncRetries = 0;
 
@@ -67,7 +66,7 @@ async function syncWorkerCount() {
     const osCount = data ? (data.total_workers || 0) : 0;
     const uiCount = appState.workerNodes.length;
 
-    // FIX 3: IF we just did a hard reset AND osCount < uiCount, RETRY with exponential backoff
+    // Retry on boot race conditions following a hard reset
     if (lastResetTime && (Date.now() - lastResetTime < 10000) && osCount < uiCount && resetSyncRetries < 3) {
       resetSyncRetries++;
       console.log(`[DEBUG] Boot desync detected (${osCount}/${uiCount}). Retry ${resetSyncRetries}/3 in 2s...`);
@@ -75,11 +74,9 @@ async function syncWorkerCount() {
       return;
     }
 
-    // Reset retry counter on success
     resetSyncRetries = 0;
 
-    // CRITICAL: If osCount === 0 (due to Celery solo-pool blocking during task compute),
-    // retain the last known valid state rather than causing the banner to vanish.
+    // Retain last known state if workers are busy compute-blocked
     if (osCount === 0 && uiCount > 0) {
       if (lastKnownWorkerCount > 0) {
         ui.updateWorkerHeader(lastKnownWorkerCount, uiCount);
@@ -90,7 +87,6 @@ async function syncWorkerCount() {
     // Update header and permanent cluster health banner
     ui.updateWorkerHeader(osCount, uiCount);
 
-    // Cache valid metrics
     if (osCount > 0) {
       lastKnownWorkerCount = osCount;
       lastKnownGhostCount = Math.max(0, osCount - uiCount);
@@ -111,20 +107,16 @@ async function syncBackendQueueDepth() {
     const data = await apiClient.fetchQueueDepth();
     const depth = Math.max(0, data.queue_depth || 0);
 
-    // Check if all workers are truly idle (not busy, not crashed)
     const allIdle = appState.workerNodes.every(w => !w.busy && !w.crashed);
 
     if (depth === 0 && allIdle && appState.pendingTaskQueue.length === 0) {
-      // Complete idle state reached
       ui.updateQueueCounter(0);
 
-      // Reset lingering timers
       if (window.workerTimers && Array.isArray(window.workerTimers)) {
         window.workerTimers.forEach(timer => clearTimeout(timer));
         window.workerTimers = [];
       }
 
-      // Reset healthy workers to IDLE
       appState.workerNodes.forEach(w => {
         if (!w.crashed) {
           w.busy = false;
@@ -134,7 +126,6 @@ async function syncBackendQueueDepth() {
       });
       console.log("[DEBUG] System fully synced. Redis empty and all workers idle.");
     } else if (depth === 0 && (!allIdle || appState.pendingTaskQueue.length > 0)) {
-      // Redis is empty BUT workers are still finalizing tasks or animations
       ui.updateQueueCounter("0 (Finalizing... ⏳)");
       console.log("[DEBUG] Redis empty, but workers still finalizing. Waiting for completion.");
     } else {
@@ -149,11 +140,9 @@ async function syncBackendQueueDepth() {
 // Initialization & Refresh State Recovery
 // ---------------------------------------------------------
 async function initializeDashboard() {
-  // Render initial workers
   ui.renderWorkerCards(appState.workerNodes);
   ui.updateWorkerCount(appState.workerNodes.length);
 
-  // Bind submit form/button with debounce
   const taskForm = document.getElementById('taskForm');
   if (taskForm) {
     taskForm.addEventListener('submit', (e) => {
@@ -170,7 +159,6 @@ async function initializeDashboard() {
     });
   }
 
-  // Bind Chaos & Scale Buttons with debounce
   const spikeBtn = document.getElementById('spikeBtn');
   if (spikeBtn) spikeBtn.addEventListener('click', () => debounceAction(spikeTraffic));
 
@@ -189,11 +177,9 @@ async function initializeDashboard() {
   const bannerHardResetBtn = document.getElementById('bannerHardResetBtn');
   if (bannerHardResetBtn) bannerHardResetBtn.addEventListener('click', () => debounceAction(killGhosts));
 
-  // Immediate telemetry fetch
   syncBackendQueueDepth();
   await syncWorkerCount();
 
-  // Recover active state on page refresh
   try {
     const data = await apiClient.fetchQueueDepth();
     ui.updateQueueCounter(Math.max(0, data.queue_depth || 0));
@@ -210,10 +196,7 @@ async function initializeDashboard() {
     console.warn("Initial sync error:", err);
   }
 
-  // Poll backend Redis queue depth every 1.5s
   setInterval(syncBackendQueueDepth, 1500);
-
-  // Poll real OS worker count every 3 seconds (The Dynamic Heartbeat)
   setInterval(syncWorkerCount, 3000);
 }
 
@@ -224,18 +207,11 @@ document.addEventListener("DOMContentLoaded", initializeDashboard);
 // ---------------------------------------------------------
 function enqueueTask(taskId, text) {
   appState.pendingTaskQueue.push({ taskId, text });
-
-  // FIX 4: Add telemetry heatmap dot
   ui.addTelemetryDot(taskId, 'queued');
-
   processNextQueueTasks();
 }
 
 function processNextQueueTasks() {
-  console.log(`[DEBUG] processNextQueueTasks called. Queue length: ${appState.pendingTaskQueue.length}`);
-  console.log(`[DEBUG] Worker states:`, appState.workerNodes.map(w => `${w.name}: busy=${w.busy}, crashed=${w.crashed}`));
-
-  // Explicitly filter out crashed and busy workers
   const idleWorker = appState.workerNodes.find(w => !w.busy && !w.crashed);
 
   if (!idleWorker) {
@@ -254,7 +230,6 @@ function processNextQueueTasks() {
 }
 
 function assignTaskToWorker(worker, taskItem) {
-  // Defensive check: Crashed workers must NEVER receive a task
   if (worker.crashed) {
     console.warn(`[DEBUG] Attempted to assign task to crashed worker ${worker.name}. Re-queueing task.`);
     appState.pendingTaskQueue.unshift(taskItem);
@@ -266,14 +241,8 @@ function assignTaskToWorker(worker, taskItem) {
   worker.activeTaskId = taskId;
 
   ui.setWorkerProcessing(worker.id, taskId, taskItem.text);
-  
-  // FIX 4: Update telemetry heatmap dot to processing
   ui.updateTelemetryDot(taskId, 'processing');
-
-  // Sync counter immediately
   syncBackendQueueDepth();
-
-  // Start polling task status
   pollTask(taskId, taskItem.text, worker);
 }
 
@@ -281,12 +250,9 @@ function completeWorkerTask(workerOrId, taskId, isSuccess, resultSentiment) {
   const worker = typeof workerOrId === 'object' ? workerOrId : appState.workerNodes.find(w => w.id === workerOrId);
   if (!worker) return;
 
-  // 1. Update UI to show SUCCESS ✅ or FAILED ❌
   ui.setWorkerCompleted(worker.id, taskId, isSuccess, resultSentiment);
 
-  // 2. WAIT 1.5 SECONDS BEFORE RESETTING
   const timer = setTimeout(() => {
-    // Only reset if worker was not crashed during execution
     if (!worker.crashed) {
       worker.busy = false;
       worker.activeTaskId = null;
@@ -294,8 +260,6 @@ function completeWorkerTask(workerOrId, taskId, isSuccess, resultSentiment) {
     }
 
     console.log(`[DEBUG] Worker ${worker.name} cool-down finished. Calling processNextQueueTasks...`);
-
-    // Allow this worker to pick the next task from the queue
     processNextQueueTasks();
   }, 1500);
 
@@ -319,29 +283,22 @@ function pollTask(taskId, text, worker) {
         const latency = ((Date.now() - startTime) / 1000).toFixed(2);
         const isSuccess = data.status === 'SUCCESS';
 
-        // 1. Activity Feed Completion Guarantee: Immediately update the specific row
         const sentiment = data.result?.sentiment || (isSuccess ? 'SUCCESS' : 'FAILED');
         ui.updateActivityLog(taskId, data.status, sentiment);
-
-        // 2. FIX 4: Update telemetry heatmap dot to success or failed
         ui.updateTelemetryDot(taskId, isSuccess ? 'success' : 'failed');
 
-        // 3. Update Latest Inference Result card
         const workerName = (data.result && data.result.worker_id) ? data.result.worker_id : (worker ? worker.name : 'worker-01');
         if (isSuccess && data.result) {
           ui.showSentimentResult(data.result, latency, workerName, taskId);
         }
 
-        // 4. Complete worker task and trigger 1.5s cool-down before picking next task
         if (worker) {
           completeWorkerTask(worker, taskId, isSuccess, sentiment);
         }
 
-        // Sync real Redis queue depth
         syncBackendQueueDepth();
       }
     } catch (e) {
-      // On transient network lag, keep row and retry - do not fail prematurely
       console.warn("Polling retry for task:", taskId, e);
     }
   }, 600);
@@ -350,32 +307,34 @@ function pollTask(taskId, text, worker) {
 }
 
 // ---------------------------------------------------------
-// Hard Reset Cluster (WMIC Zombie Purge & Clean 3-Worker Respawn)
+// Hard Reset Cluster (WMIC Zombie Purge & Clean 2-Worker Respawn)
 // ---------------------------------------------------------
 async function hardResetCluster() {
-  ui.showToast('💀 Purging all ghost Celery processes via WMIC... Spawning 3 clean workers.');
+  ui.showToast('💀 Purging all ghost Celery processes... Spawning 2 clean workers.');
 
   try {
     const data = await apiClient.hardResetCluster();
 
-    // Reset state to exactly 3 clean workers
+    // Reset state to exactly 2 clean workers (EC2 Memory-Safe default)
     appState.totalProcessed = 0;
     appState.pendingTaskQueue = [];
 
     appState.workerNodes = [
       { id: 1, name: "worker-01", role: "Primary NLP Core", busy: false, crashed: false, activeTaskId: null },
-      { id: 2, name: "worker-02", role: "Inference Engine", busy: false, crashed: false, activeTaskId: null },
-      { id: 3, name: "worker-03", role: "Fault Tolerance", busy: false, crashed: false, activeTaskId: null }
+      { id: 2, name: "worker-02", role: "Inference Engine", busy: false, crashed: false, activeTaskId: null }
     ];
 
-    lastKnownWorkerCount = 3;
+    lastKnownWorkerCount = 2;
     lastKnownGhostCount = 0;
     lastResetTime = Date.now();
     resetSyncRetries = 0;
 
-    // FIX 2 & 4: Reset dashboard (re-renders exactly 3 cards and clears heatmap)
+    // Re-enable scale button on reset
+    const scaleBtn = document.getElementById('scaleBtn');
+    if (scaleBtn) scaleBtn.disabled = false;
+
     ui.resetDashboard(appState.workerNodes);
-    ui.showToast(data.message || '✅ Cluster purged and reset to 3 clean workers!');
+    ui.showToast(data.message || '✅ Cluster purged and reset to 2 clean workers!');
 
     setTimeout(() => {
       syncWorkerCount();
@@ -401,18 +360,21 @@ async function killGhosts() {
       const count = result.killed ? result.killed.length : 0;
       ui.showToast(result.message || `✅ Killed ${count} ghost worker(s).`);
       
-      // Reconcile UI cards with OS state (preserves logs/queue/heatmap)
       await syncWorkerCount();
       const data = await apiClient.fetchWorkerCount();
       const osCount = data.total_workers || 0;
       
       if (osCount < appState.workerNodes.length) {
-        // Trim UI cards to match the OS count without wiping state
         appState.workerNodes = appState.workerNodes.slice(0, osCount);
         ui.renderWorkerCards(appState.workerNodes);
         ui.updateWorkerHeader(osCount, appState.workerNodes.length);
       }
-      // Note: We deliberately do NOT clear pendingTaskQueue or activityFeed!
+
+      // Re-enable scale button if below 4 nodes
+      if (appState.workerNodes.length < 4) {
+        const scaleBtn = document.getElementById('scaleBtn');
+        if (scaleBtn) scaleBtn.disabled = false;
+      }
     } else {
       ui.showToast(result.message || 'No ghosts detected.');
     }
@@ -431,20 +393,16 @@ async function restartWorker(workerId) {
   ui.showToast(`Restarting ${worker.name}... Spawning healthy instance`);
 
   try {
-    // Spawn a fresh silent worker process on backend
     await apiClient.scaleOut();
 
-    // FORCE reset crash state
     worker.crashed = false;
     worker.busy = false;
     worker.activeTaskId = null;
 
-    // Reset UI card and disable restart button
     ui.setWorkerIdle(worker.id);
     ui.disableRestartButton(worker.id);
     ui.showToast(`${worker.name} restarted and recovered! (IDLE)`);
 
-    // Let the newly recovered worker pick up any pending queue task
     processNextQueueTasks();
     syncBackendQueueDepth();
     await syncWorkerCount();
@@ -464,7 +422,6 @@ async function submitTask() {
     return;
   }
 
-  // Instant visual feedback
   ui.updateQueueCounter(1);
 
   try {
@@ -476,7 +433,6 @@ async function submitTask() {
     appState.totalProcessed++;
     ui.updateElement('feedCountTag', `${appState.totalProcessed} Events`);
 
-    // Enqueue task into sequential dispatcher
     enqueueTask(data.task_id, text);
     syncBackendQueueDepth();
 
@@ -487,9 +443,17 @@ async function submitTask() {
 }
 
 // ---------------------------------------------------------
-// Dynamic Horizontal Scaling (Silent Windows/Unix Background Process)
+// Dynamic Horizontal Scaling (Memory-Safe Cap: Max 4 Nodes)
 // ---------------------------------------------------------
 async function scaleOutWorker() {
+  // Cap logic: Prevent scaling beyond 4 nodes for EC2 memory safety
+  if (appState.workerNodes.length >= 4) {
+    ui.showToast('⚠️ Max workers (4) reached for this demo environment.');
+    const scaleBtn = document.getElementById('scaleBtn');
+    if (scaleBtn) scaleBtn.disabled = true;
+    return;
+  }
+
   const nextId = appState.workerNodes.length + 1;
   const nextName = `worker-${nextId.toString().padStart(2, '0')}`;
 
@@ -501,7 +465,7 @@ async function scaleOutWorker() {
     const newWorker = {
       id: nextId,
       name: nextName,
-      role: "Dynamic Scaled Node",
+      role: nextId === 3 ? "Fault Tolerance" : (nextId === 4 ? "High-Load Buffer" : "Dynamic Scaled Node"),
       busy: false,
       crashed: false,
       activeTaskId: null
@@ -512,7 +476,12 @@ async function scaleOutWorker() {
     ui.updateWorkerCount(appState.workerNodes.length);
     ui.showToast(data.message || `${nextName} scaled up silently!`);
 
-    // Allow the new scaled node to immediately pick up pending tasks
+    // Disable button visually if cap is reached
+    if (appState.workerNodes.length >= 4) {
+      const scaleBtn = document.getElementById('scaleBtn');
+      if (scaleBtn) scaleBtn.disabled = true;
+    }
+
     processNextQueueTasks();
     setTimeout(syncWorkerCount, 2000);
 
@@ -526,8 +495,6 @@ async function scaleOutWorker() {
 // ---------------------------------------------------------
 async function spikeTraffic() {
   ui.showToast('🔥 Launching Traffic Spike: 50 Tasks into Redis...');
-
-  // Instant visual feedback: Jump counter to 50 immediately!
   ui.updateQueueCounter(50);
 
   try {
@@ -539,8 +506,6 @@ async function spikeTraffic() {
         const text = `Spike Batch #${idx + 1} - Customer Feedback Review`;
         ui.addActivityLog(id, text, 'QUEUED');
         appState.totalProcessed++;
-
-        // Enqueue each task sequentially into the dispatcher
         enqueueTask(id, text);
       });
 
@@ -561,7 +526,6 @@ async function spikeTraffic() {
 async function simulateCrash() {
   ui.showToast('💀 Simulating worker-02 Crash & Failover... (Click ♻️ to restart)');
 
-  // Set worker-02 into crashed state with active restart button
   const w2 = appState.workerNodes.find(w => w.id === 2);
   if (w2) {
     w2.crashed = true;
@@ -570,12 +534,10 @@ async function simulateCrash() {
 
   ui.setWorkerCrashed(2);
 
-  // Highlight all other healthy workers absorbing failover
   appState.workerNodes.filter(w => w.id !== 2 && !w.crashed).forEach(w => {
     ui.setWorkerFailover(w.id);
   });
 
-  // Instant visual feedback
   ui.updateQueueCounter(10);
 
   try {
@@ -586,15 +548,12 @@ async function simulateCrash() {
         const text = idx % 2 === 0 ? `Fault Injection Test #${idx + 1}` : `Resilient Payload #${idx + 1}`;
         ui.addActivityLog(id, text, 'QUEUED');
         appState.totalProcessed++;
-
-        // Enqueue tasks - available healthy workers will pick them sequentially
         enqueueTask(id, text);
       });
 
       ui.updateElement('feedCountTag', `${appState.totalProcessed} Events`);
     }
 
-    // After 6 seconds, reset absorbing healthy workers to IDLE while leaving worker-02 strictly CRASHED until manually restarted
     setTimeout(() => {
       appState.workerNodes.filter(w => w.id !== 2 && !w.busy && !w.crashed).forEach(w => {
         ui.setWorkerIdle(w.id);
@@ -614,7 +573,6 @@ async function simulateCrash() {
 // Reset Telemetry & Logs
 // ---------------------------------------------------------
 function resetTelemetry() {
-  // Clear all in-flight polling intervals
   activeTaskPollers.forEach(interval => clearInterval(interval));
   activeTaskPollers.clear();
 
@@ -626,6 +584,12 @@ function resetTelemetry() {
     w.crashed = false;
     w.activeTaskId = null;
   });
+
+  // Re-enable scale button if below 4 nodes
+  if (appState.workerNodes.length < 4) {
+    const scaleBtn = document.getElementById('scaleBtn');
+    if (scaleBtn) scaleBtn.disabled = false;
+  }
 
   ui.resetDashboard(appState.workerNodes);
   syncBackendQueueDepth();

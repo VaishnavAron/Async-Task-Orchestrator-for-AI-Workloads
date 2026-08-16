@@ -98,7 +98,8 @@ const ui = {
   updateWorkerHeader(osCount, uiCount) {
     const headerElement = document.getElementById('topWorkerCount');
     const clusterSubtag = document.getElementById('clusterSubtag');
-    if (clusterSubtag) clusterSubtag.innerText = `${uiCount} Active Nodes`;
+    const capHint = (uiCount >= 4) ? ' (Max)' : '';
+    if (clusterSubtag) clusterSubtag.innerText = `${uiCount} Active Nodes${capHint}`;
 
     if (headerElement) {
       const ghostCount = osCount - uiCount;
@@ -113,14 +114,14 @@ const ui = {
         // 🟢 PERFECT STATE: Fully synced
         headerElement.innerHTML = `
           <span style="color: #10b981; font-weight: 600;">
-            🟢 ${osCount} Workers (Synced)
+            🟢 ${osCount} Workers${capHint} (Synced)
           </span>
         `;
       } else {
         // 🟡 DEGRADED STATE: OS shows 0 or mismatch
         headerElement.innerHTML = `
           <span style="color: #f59e0b; font-weight: 600;">
-            🟡 ${osCount} Online | ${uiCount} Cards (Desync)
+            🟡 ${osCount} Online${capHint} | ${uiCount} Cards (Desync)
           </span>
         `;
       }
